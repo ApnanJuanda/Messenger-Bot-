@@ -2,13 +2,14 @@ require("dotenv").config();
 var request = require("request");
 var express = require("express");
 var router = express.Router();
+var url = require("url");
 const stomp = require("stomp-client");
-const { client_webhook} = require("../mongodb/models/client_webhook");
+const { client_webhook } = require("../mongodb/models/client_webhook");
 
 const stompClient = new stomp("localhost", 61613); //https://coresystem-messenger.herokuapp.com/
 
 router.get("/", (req, res) => {
-  let VERIFY_TOKEN = process.env.PAGE_ACCESS_TOKEN;
+  let VERIFY_TOKEN = process.env.MY_VERIFY_TOKEN;
 
   let mode = req.query["hub.mode"];
   let token = req.query["hub.verify_token"];
@@ -24,99 +25,68 @@ router.get("/", (req, res) => {
   }
 });
 
+stompClient.connect(() => {
+  router.post("/", (req, res) => {
+    let body = req.body;
+    
+    //var headersMessage;
+    var url = req.originalUrl;
+    var webhook_id = url.match(/^\/.*?\/([0-9]+).*$/)[1];
+    //console.log("Ini Webhook_id" + webhook_id);
 
-router.post("/", (req, res) => {
-  let body = req.body;
-  var jsonMessage;
+    if (body.object === "page") {
+      body.entry.forEach(function (entry) {
+        let webhook_event = entry.messaging[0];
+        let sender_psid = webhook_event.sender.id;
+        let page_id = webhook_event.recipient.id;
+        let message_text = webhook_event.message.text;
+        let echo = webhook_event.message.is_echo;
 
-  if (body.object === "page") {
-    body.entry.forEach(function (entry) {
-      let webhook_event = entry.messaging[0];
-      //console.log(webhook_event);
-
-      let sender_psid = webhook_event.sender.id;
-      let page_idd = webhook_event.recipient.id;
-      let message_textt = webhook_event.message.text;
-      let echo = webhook_event.message.is_echo;
-      //console.log("Sender PSID: " + sender_psid);
-
-      if(echo == null){
-        stompClient.connect(() => {
+        if (echo == null) {
+          /*Publish to QUEUE ActiveMQ */
           const notification = {
             client_id: sender_psid,
-            page_id: page_idd,
-            message_text: message_textt,
-  
-          }
-          stompClient.publish("/queue/coresystem", JSON.stringify(notification));
+            page_id: page_id,
+            message_text: message_text,
+          };
+          var message = JSON.stringify(notification);
+          if(stompClient.publish("/queue/coresystem", message)){
+            console.log("QUEUE SEND");
+          }  
+        }
+        
+        if (webhook_event.message) {
+          //entry.messaging[0].message
+          handleMessage(sender_psid, webhook_event.message);
+          res.status(200).send("EVENT_RECEIVED");
+        } else if (webhook_event.postback) {
+          handlePostback(sender_psid, webhook_event.postback);
+        }
+      });
       
-          stompClient.subscribe("/queue/coresystem", (body, headers) => {
-            jsonMessage = JSON.parse(body)
-            var client = new client_webhook({
-              page_id: jsonMessage.page_id,
-              client_id: jsonMessage.client_id,
-              message: jsonMessage.message_text
-            });
-            console.log(jsonMessage);
-          
-            client.save().then(
-              (doc) => {
-                console.log("Success save to mongoDB");
-              },
-              (e) => {
-                console.log("fail to ssave with error: ", e);
-              }
-            );
-          });
-          //stompClient.disconnect();
-        })
-      }
+      res.status(200).send("EVENT_RECEIVED");
+    } else {
+      res.sendStatus(404);
+    }
       
-      
+    
+  });
 
-      if (webhook_event.message) { //entry.messaging[0].message
-        handleMessage(sender_psid, webhook_event.message);
-        res.status(200).send("EVENT_RECEIVED");
-      }
-      else if (webhook_event.postback) {
-        handlePostback(sender_psid, webhook_event.postback);
-      }
+  stompClient.subscribe("/queue/coresystem", function (body, headers){
+    var jsonMessage = JSON.parse(body);
+    var client = new client_webhook({
+      page_id: jsonMessage.page_id,
+      client_id: jsonMessage.client_id,
+      message: jsonMessage.message_text,
+      message_id: headers["message-id"],
     });
-
-    res.status(200).send("EVENT_RECEIVED");
-  } else {
-    res.sendStatus(404);
-  }
+    client.save();
+    console.log("Database saveddddddddddd");
+  });
 });
 
-// router.post("/", (req, res) => {
-//   // Parse the request body from the POST
-//   let body = req.body;
-
-//   // Check the webhook event is from a Page subscription
-//   if (body.object === "page") {
-//     // Iterate over each entry - there may be multiple if batched
-//     body.entry.forEach(function (entry) {
-//       // Get the webhook event. entry.messaging is an array, but
-//       // will only ever contain one event, so we get index 0
-//       let webhook_event = entry.messaging[0];
-//       console.log(webhook_event);
-
-//       // Get the sender PSID
-//       // let sender_psid = webhook_event.sender.id;
-//       // console.log("Sender PSID: " + sender_psid);
-//     });
-
-//     // Return a '200 OK' response to all events
-//     res.status(200).send("EVENT_RECEIVED");
-//   } else {
-//     // Return a '404 Not Found' if event is not from a page subscription
-//     res.sendStatus(404);
-//   }
-// }); 
-
 // Handles messages events
-function handleMessage(sender_psid, received_message) {
+function handleMessage(sender_psid, received_message) {  
   let response;
 
   if (received_message.text) {
@@ -167,7 +137,7 @@ function handlePostback(sender_psid, received_postback) {
   } else if (payload === "no") {
     response = { text: "Oops, try sending another image." };
   }
-  
+
   callSendAPI(sender_psid, response);
 }
 

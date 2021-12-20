@@ -10,6 +10,9 @@ const client_webhook = mongoose.model("client_webhook", {
   message: {
     type: String,
   },
+  message_id: {
+    type: String
+  }
 });
 
 module.exports = { client_webhook };

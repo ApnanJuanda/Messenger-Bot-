@@ -28,7 +28,7 @@ app.use(express.static(path.join(__dirname, "public")));
 
 app.use("/", indexRouter);
 app.use("/users", usersRouter);
-app.use("/webhook", webhookRouter);
+app.use("/webhook/1234", webhookRouter);
 
 // catch 404 and forward to error handler
 app.use(function (req, res, next) {
